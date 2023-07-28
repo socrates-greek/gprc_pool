@@ -1,4 +1,4 @@
-module github.com/Bifang-Bird/grpc_pool
+module github.com/Bifang-Bird/gprc_pool
 
 go 1.18
 

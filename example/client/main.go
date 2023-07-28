@@ -18,8 +18,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	pool "github.com/Bifang-Bird/grpc_pool"
-	"github.com/Bifang-Bird/grpc_pool/example/pb"
+	"github.com/Bifang-Bird/gprc_pool"
+	"github.com/Bifang-Bird/gprc_pool/example/pb"
 	"log"
 	"time"
 )
