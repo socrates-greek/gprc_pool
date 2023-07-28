@@ -18,11 +18,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	pool "github.com/Bifang-Bird/grpc_pool"
+	"github.com/Bifang-Bird/grpc_pool/example/pb"
 	"log"
 	"time"
-
-	"github.com/shimingyah/pool"
-	"github.com/shimingyah/pool/example/pb"
 )
 
 var addr = flag.String("addr", "127.0.0.1:50000", "the address to connect to")

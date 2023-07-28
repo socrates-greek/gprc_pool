@@ -18,14 +18,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	pool "github.com/Bifang-Bird/grpc_pool"
+	"github.com/Bifang-Bird/grpc_pool/example/pb"
 	"log"
 	"net"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
-
-	"github.com/shimingyah/pool"
-	"github.com/shimingyah/pool/example/pb"
 )
 
 var port = flag.Int("port", 50000, "port number")

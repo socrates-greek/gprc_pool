@@ -17,12 +17,12 @@ package pool
 import (
 	"context"
 	"flag"
+	"github.com/Bifang-Bird/grpc_pool/example/pb"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/shimingyah/pool/example/pb"
 	"github.com/stretchr/testify/require"
 )
 
