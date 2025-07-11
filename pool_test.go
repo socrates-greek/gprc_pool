@@ -15,8 +15,12 @@
 package pool
 
 import (
+	"codeup.aliyun.com/6145b2b428003bdc3daa97c8/go-simba/go-simba-proto.git/gen"
 	"context"
 	"flag"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+	"log"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -297,4 +301,150 @@ func BenchmarkSingleRPC(b *testing.B) {
 			testFunc()
 		}
 	})
+}
+
+func TestNewConnectionPool_Continuous(t *testing.T) {
+	//// 1. 创建连接池
+	//pool, err := NewConnectionPool(
+	//	"cp-connect-sim.cn-dev.simbalink.cn:30000",
+	//	10,            // 最大连接数
+	//	5*time.Minute, // 空闲超时
+	//	grpc.WithInsecure(),
+	//	grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
+	//)
+	//if err != nil {
+	//	log.Fatalf("创建连接池失败: %v", err)
+	//}
+	//defer pool.Close()
+
+	//// 2. 配置重试策略
+	//retryPolicy := DefaultRetryPolicy()
+
+	//p, err := New("cp-connect-sim.cn-dev.simbalink.cn:30000", Options{
+	//	Dial:                 Dial,
+	//	MaxIdle:              10,
+	//	MaxActive:            20,
+	//	MaxConcurrentStreams: 200,
+	//	Reuse:                true,
+	//})
+	//if err != nil {
+	//	log.Printf("创建连接池失败: %v", err)
+	//}
+
+	pool, err := NewConnPool(
+		"cp-connect-sim.cn-dev.simbalink.cn:30000",
+		1000,           // 最大连接数
+		2*time.Minute,  // 空闲超时时间
+		10*time.Minute, // 连接最大生命周期
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    30 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
+	)
+	if err != nil {
+		log.Fatalf("创建连接池失败: %v", err)
+	}
+
+	// 3. 启动并发任务循环
+	const concurrency = 100 // 并发数量
+
+	var wg sync.WaitGroup
+	ticker := time.NewTicker(1 * time.Second) // 每秒打印一次统计信息
+	defer ticker.Stop()
+
+	// 用于统计
+	var totalCalls, successCalls, failedCalls int64
+	var totalLatency time.Duration
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					start := time.Now()
+					//err := RetryInvoke(
+					//	context.Background(),
+					//	pool,
+					//	retryPolicy,
+					//	func(conn *grpc.ClientConn) error {
+					//		req := &gen.QuerySimRequest{
+					//			Type: "iccid",
+					//			Data: "10000006821260360001",
+					//		}
+					//		resp, err := gen.NewConnectSimServiceClient(conn).QuerySimInfo(context.Background(), req)
+					//		if err != nil || resp.Code != 0 {
+					//			return status.Errorf(codes.Unavailable, "RPC失败: %v, resp: %v", err, resp)
+					//		}
+					//		//log.Println("RPC结果:", resp)
+					//		return nil
+					//	},
+					//)
+
+					//conn, err := p.Get()
+					//if err != nil {
+					//	log.Printf("创建连接池失败: %v", err)
+					//}
+					//req := &gen.QuerySimRequest{
+					//	Type: "iccid",
+					//	Data: "10000006821260360001",
+					//}
+					//resp, err := gen.NewConnectSimServiceClient(conn.Value()).QuerySimInfo(context.Background(), req)
+					//if err != nil || resp.Code != 0 {
+					//	log.Printf("RPC失败: %v, resp: %v", err, resp)
+					//}
+
+					conn, err := pool.Get(ctx)
+					if err != nil {
+						log.Printf("[%d] 获取连接失败: %v", i, err)
+						continue // 继续尝试而非退出
+					}
+
+					req := &gen.QuerySimRequest{
+						Type: "iccid",
+						Data: "10000006821260360001",
+					}
+					resp, err := gen.NewConnectSimServiceClient(conn.ClientConn).QuerySimInfo(context.Background(), req)
+					if err != nil || resp.Code != 0 {
+						log.Printf("RPC失败: %v, resp: %v", err, resp)
+					}
+
+					// 无论成功与否，使用完后归还连接
+					pool.Put(conn)
+
+					elapsed := time.Since(start)
+					atomic.AddInt64(&totalCalls, 1)
+					atomic.AddInt64((*int64)(&totalLatency), int64(elapsed))
+					if err == nil {
+						atomic.AddInt64(&successCalls, 1)
+					} else {
+						atomic.AddInt64(&failedCalls, 1)
+					}
+				}
+			}
+		}(i)
+	}
+
+	// 主循环：每秒打印统计信息
+	for {
+		select {
+		case <-ticker.C:
+			calls := atomic.LoadInt64(&totalCalls)
+			success := atomic.LoadInt64(&successCalls)
+			failed := atomic.LoadInt64(&failedCalls)
+			avgLatency := time.Duration(0)
+			if calls > 0 {
+				avgLatency = time.Duration(atomic.LoadInt64((*int64)(&totalLatency))/calls) * time.Nanosecond
+			}
+			log.Printf("[统计] 总调用: %d | 成功: %d | 失败: %d | 平均延迟: %v", calls, success, failed, avgLatency)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
