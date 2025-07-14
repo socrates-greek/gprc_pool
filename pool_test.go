@@ -12,7 +12,7 @@
 // ee the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package pool
 
 import (
 	"codeup.aliyun.com/6145b2b428003bdc3daa97c8/go-simba/go-simba-proto.git/gen"
@@ -344,7 +344,7 @@ func TestNewConnectionPool_Continuous(t *testing.T) {
 	//}
 
 	// 3. 启动并发任务循环
-	const concurrency = 20 // 并发数量
+	const concurrency = 1000 // 并发数量
 
 	var wg sync.WaitGroup
 	ticker := time.NewTicker(1 * time.Second) // 每秒打印一次统计信息
