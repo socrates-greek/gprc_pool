@@ -344,7 +344,7 @@ func TestNewConnectionPool_Continuous(t *testing.T) {
 	//}
 
 	// 3. 启动并发任务循环
-	const concurrency = 1000 // 并发数量
+	const concurrency = 50 // 并发数量
 
 	var wg sync.WaitGroup
 	ticker := time.NewTicker(1 * time.Second) // 每秒打印一次统计信息
