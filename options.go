@@ -12,7 +12,7 @@
 // ee the License for the specific language governing permissions and
 // limitations under the License.
 
-package pool
+package main
 
 import (
 	"context"
@@ -72,6 +72,9 @@ type Options struct {
 	// the connection to return, If Reuse is false and the pool is at the MaxActive limit,
 	// create a one-time connection to return.
 	Reuse bool
+
+	HealthCheckInterval time.Duration // 健康检查间隔（默认30s）
+	MinCheckInterval    time.Duration // 最小检查间隔（默认5s）
 }
 
 // DefaultOptions sets a list of recommended options for good performance.
@@ -82,6 +85,8 @@ var DefaultOptions = Options{
 	MaxActive:            64,
 	MaxConcurrentStreams: 64,
 	Reuse:                true,
+	HealthCheckInterval:  30 * time.Second,
+	MinCheckInterval:     5 * time.Second,
 }
 
 // Dial return a grpc connection with defined configurations.
@@ -106,4 +111,14 @@ func DialTest(address string) (*grpc.ClientConn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DialTimeout)
 	defer cancel()
 	return grpc.DialContext(ctx, address, grpc.WithInsecure())
+}
+
+// 设置默认值
+func (o *Options) setDefaults() {
+	if o.HealthCheckInterval == 0 {
+		o.HealthCheckInterval = 30 * time.Second
+	}
+	if o.MinCheckInterval == 0 {
+		o.MinCheckInterval = 5 * time.Second
+	}
 }

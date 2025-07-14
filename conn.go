@@ -12,10 +12,13 @@
 // ee the License for the specific language governing permissions and
 // limitations under the License.
 
-package pool
+package main
 
 import (
+	"context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"time"
 )
 
 // Conn single grpc connection inerface
@@ -30,9 +33,11 @@ type Conn interface {
 
 // Conn is wrapped grpc.ClientConn. to provide close and value method.
 type conn struct {
-	cc   *grpc.ClientConn
-	pool *pool
-	once bool
+	cc         *grpc.ClientConn
+	pool       *pool
+	once       bool
+	lastActive time.Time // 记录最后活跃时间[6](@ref)
+
 }
 
 // Value see Conn interface.
@@ -61,8 +66,32 @@ func (c *conn) reset() error {
 
 func (p *pool) wrapConn(cc *grpc.ClientConn, once bool) *conn {
 	return &conn{
-		cc:   cc,
-		pool: p,
-		once: once,
+		cc:         cc,
+		pool:       p,
+		once:       once,
+		lastActive: time.Now(), // 初始化活跃时间
+	}
+}
+
+// IsHealthy 检查gRPC连接的健康状态
+func (c *conn) IsHealthy() bool {
+	// 1. 检查底层连接是否已关闭
+	if c.cc == nil {
+		return false
+	}
+	// 2. 使用gRPC内置状态机检查[1](@ref)
+	state := c.cc.GetState()
+	switch state {
+	case connectivity.Ready, connectivity.Idle, connectivity.Connecting:
+		// 活跃或空闲状态视为健康
+		c.lastActive = time.Now()
+		return true
+	case connectivity.TransientFailure:
+		// 短暂故障：尝试执行轻量级PING检查[6](@ref)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return c.cc.WaitForStateChange(ctx, state) != true
+	default:
+		return false // Connecting/Shutdown状态直接返回不健康
 	}
 }

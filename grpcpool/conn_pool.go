@@ -1,4 +1,4 @@
-package pool
+package grpcpool
 
 import (
 	"context"
@@ -123,7 +123,10 @@ func (p *ConnPool) Get(ctx context.Context) (*Connect, error) {
 		// 检查连接健康状态（根据 idleTimeout 决定是否需要验证）
 		if conn.ShouldCheckHealth(p.idleTimeout) {
 			if err := conn.Validate(1 * time.Second); err != nil {
-				conn.Close()
+				err := conn.Close()
+				if err != nil {
+					return nil, err
+				}
 				atomic.AddInt32(&p.activeCount, -1)
 				return p.createConnection()
 			}
@@ -162,7 +165,10 @@ func (p *ConnPool) Get(ctx context.Context) (*Connect, error) {
 func (p *ConnPool) Put(conn *Connect) {
 	if conn == nil || atomic.LoadInt32(&p.closed) == 1 {
 		if conn != nil {
-			conn.Close()
+			err := conn.Close()
+			if err != nil {
+				return
+			}
 			atomic.AddInt32(&p.activeCount, -1)
 		}
 		return

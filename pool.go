@@ -12,15 +12,17 @@
 // ee the License for the specific language governing permissions and
 // limitations under the License.
 
-package pool
+package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ErrClosed is the error resulting if the pool is closed via pool.Close().
@@ -68,6 +70,10 @@ type pool struct {
 
 	// control the atomic var current's concurrent read write.
 	sync.RWMutex
+
+	checkerCh   chan struct{}      // 健康检查控制通道
+	stopChecker context.CancelFunc // 停止健康检查的函数
+	healthCache []int32            // 连接健康状态缓存(原子操作: 1=健康, 0=失效)
 }
 
 // New return a connection pool.
@@ -86,19 +92,33 @@ func New(address string, option Options) (Pool, error) {
 	}
 
 	p := &pool{
-		index:   0,
-		current: int32(option.MaxIdle),
-		ref:     0,
-		opt:     option,
-		conns:   make([]*conn, option.MaxActive),
-		address: address,
-		closed:  0,
+		index:       0,
+		current:     int32(option.MaxIdle),
+		ref:         0,
+		opt:         option,
+		conns:       make([]*conn, option.MaxActive),
+		address:     address,
+		closed:      0,
+		healthCache: make([]int32, option.MaxActive),
 	}
+
+	//// 初始化健康状态为健康
+	for i := range p.healthCache {
+		atomic.StoreInt32(&p.healthCache[i], 1)
+	}
+
+	// 启动健康检查 [3,5](@ref)
+	ctx, cancel := context.WithCancel(context.Background())
+	p.stopChecker = cancel
+	go p.startHealthChecker(ctx)
 
 	for i := 0; i < p.opt.MaxIdle; i++ {
 		c, err := p.opt.Dial(address)
 		if err != nil {
-			p.Close()
+			err := p.Close()
+			if err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("dial is not able to fill the pool: %s", err)
 		}
 		p.conns[i] = p.wrapConn(c, false)
@@ -217,6 +237,12 @@ func (p *pool) Close() error {
 	atomic.StoreInt32(&p.ref, 0)
 	p.deleteFrom(0)
 	log.Printf("close pool success: %v\n", p.Status())
+
+	// 触发健康检查协程退出
+	if p.stopChecker != nil {
+		p.stopChecker()
+	}
+
 	return nil
 }
 
@@ -224,4 +250,74 @@ func (p *pool) Close() error {
 func (p *pool) Status() string {
 	return fmt.Sprintf("address:%s, index:%d, current:%d, ref:%d. option:%v",
 		p.address, p.index, p.current, p.ref, p.opt)
+}
+
+func (p *pool) startHealthChecker(ctx context.Context) {
+	ticker := time.NewTicker(p.opt.HealthCheckInterval)
+	defer ticker.Stop()
+	log.Printf("go pool startHealthChecker pool: %v\n", len(p.conns))
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.checkConnections()
+		}
+	}
+}
+
+func (p *pool) checkConnections() {
+	p.RLock()
+	defer p.RUnlock()
+
+	current := int(atomic.LoadInt32(&p.current))
+	for i := 0; i < current; i++ {
+		conn := p.conns[i]
+		if conn == nil {
+			continue
+		}
+
+		//log.Printf("pool startHealthChecker: %v,%v\n", time.Since(conn.lastActive), p.opt.MinCheckInterval)
+		// 跳过最近检查过的连接（避免频繁检查）
+		if time.Since(conn.lastActive) < p.opt.MinCheckInterval {
+			//log.Printf("pool startHealthChecker: %v,%v\n", time.Since(conn.lastActive), p.opt.MinCheckInterval)
+			continue
+		}
+
+		// 执行健康检查 [6](@ref)
+		healthy := conn.IsHealthy()
+		atomic.StoreInt32(&p.healthCache[i], boolToInt(healthy))
+		//log.Printf("startHealthChecker: %v,健康情况 %v,MinCheckInterval:%v", time.Since(conn.lastActive), healthy, p.opt.MinCheckInterval)
+		// 处理失效连接
+		if !healthy {
+			p.handleUnhealthyConn(i)
+		}
+	}
+}
+
+// 处理失效连接（带锁保护）
+func (p *pool) handleUnhealthyConn(index int) {
+	p.Lock()
+	defer p.Unlock()
+	// 双重检查（避免重复处理）
+	if atomic.LoadInt32(&p.healthCache[index]) == 0 {
+		log.Printf("removing unhealthy connection at index %d", index)
+		p.reset(index)
+		// 创建新连接替换 [4](@ref)
+		if newConn, err := p.opt.Dial(p.address); err == nil {
+			p.conns[index] = p.wrapConn(newConn, false)
+			atomic.StoreInt32(&p.healthCache[index], 1)
+		}
+	}
+}
+
+func boolToInt(b bool) int32 {
+	var i int32
+	if b {
+		i = 1
+	} else {
+		i = 0
+	}
+	return i
 }
